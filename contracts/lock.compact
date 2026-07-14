@@ -1,0 +1,57 @@
+pragma language_version >= 0.16;
+
+import CompactStandardLibrary;
+
+enum State { UNSET, SET, RELEASED }
+
+export ledger authority: Bytes<32>;
+export ledger secretHash: Bytes<32>;
+export ledger state: State;
+export ledger round: Counter;
+export ledger lastCheckInRound: Uint<64>;
+
+
+witness secretKey(): Bytes<32>;
+
+circuit publicKey(round: Field, sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>(
+    [pad(32, "midnight:silentsignal:pk"), round as Bytes<32>, sk]);
+}
+
+constructor() {
+  state = State.UNSET;
+}
+
+export circuit lockSecret(hash: Bytes<32>): [] {
+  assert(state == State.UNSET, "Secret already locked");
+  const sk = secretKey();
+  const pk = publicKey(round, sk);
+  authority = disclose(pk);
+  secretHash = disclose(hash);
+  state = State.SET;
+  lastCheckInRound = disclose(round as Uint<64>);
+}
+
+export circuit checkIn(): [] {
+  assert(state == State.SET, "No active lock");
+  const sk = secretKey();
+  const pk = publicKey(round, sk);
+  assert(authority == pk, "Only owner can check in");
+  lastCheckInRound = disclose(round as Uint<64>);
+  round.increment(1);
+}
+
+export circuit checkAndRelease(): [] {
+  assert(state == State.SET, "Nothing to release");
+  assert((round as Uint<64>) >= lastCheckInRound + 3, "Grace period not yet elapsed");
+  state = State.RELEASED;
+  round.increment(1);
+}
+
+export circuit getSecretHash(): Bytes<32> {
+  assert(state == State.RELEASED, "Secret not yet released");
+  return secretHash;
+}
+export circuit tick(): [] {
+  round.increment(1);
+}
